@@ -1,0 +1,48 @@
+const { declare } = require('@babel/helper-plugin-utils');
+const importModule = require('@babel/helper-module-imports');
+
+const autoTrackPlugin = declare((api, options, dirname) => {
+    api.assertVersion(7);
+    return {
+        visitor: {
+            Program: {
+                enter(path, state) { 
+                    path.traverse({
+                        ImportDeclaration (curPath) {
+                            const requirePath = curPath.get('source').node.value;  //  当前模块的引入
+                            if (requirePath === options.trackerPath) {  
+                                const specifierPath = curPath.get('specifiers.0'); 
+                                if (specifierPath.isImportSpecifier()) {   // 有没有被引入，这里被引入
+                                    state.trackerImportId = specifierPath.toString();
+                                } else if(specifierPath.isImportNamespaceSpecifier()) {
+                                    state.trackerImportId = specifierPath.get('local').toString();
+                                }
+                                path.stop();
+                            }
+
+                        }
+                    });
+                    if (!state.trackerImportId) {
+                        state.trackerImportId  = importModule.addDefault(path, 'tracker',{
+                            nameHint: path.scope.generateUid('tracker')
+                        }).name;
+               
+                        
+                        state.trackerAST = api.template.statement(`${state.trackerImportId}()`)();  // 这是自定义跟踪的代码
+                    }
+
+                }
+            },
+            'ClassMethod|ArrowFunctionExpression|FunctionExpression|FunctionDeclaration'(path, state) {
+                const bodyPath = path.get('body');
+                if (bodyPath.isBlockStatement()) {
+                    bodyPath.node.body.unshift(state.trackerAST);
+                } else {
+                    const ast = api.template.statement(`{${state.trackerImportId}();return PREV_BODY;}`)({PREV_BODY: bodyPath.node});
+                    bodyPath.replaceWith(ast);
+                }
+            }
+        }
+    }
+});
+module.exports = autoTrackPlugin;
